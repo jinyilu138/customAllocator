@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #define PAGE_SIZE 4096
+#define MIN_SPLIT_SIZE 16  // arbutrariy
 
 // allocate memory in blocks, need a header for each block
 // block size = header, payload and padding
@@ -58,12 +59,33 @@ void finalFree(void *addrPtr, size_t size)
     }
 }
 
+void coalesce ()
+{
+    block *current = freeList;
+    while (current && current->next)
+    {
+        block *next = current->next;
+        // current end point to first byte post current (should be address of next)
+        char *curr_end = reinterpret_cast<char *>(current) + sizeof(block) + current->payload;
+        if (curr_end == reinterpret_cast<char *>(next))
+        {
+            // extend payload space to header of next + its payload
+            current->payload += sizeof(block) + next->payload;
+            current->next = next->next;
+        }
+        else
+        {
+            current = current->next;
+        }
+    }
+}
 void myFree(void *ptr)
 {
     if (!ptr) return;
 
     block *header = reinterpret_cast<block *>(ptr) - 1;
     header->free = true;
+    coalesce();
 }
 
 void *myMalloc (size_t size)
@@ -73,20 +95,58 @@ void *myMalloc (size_t size)
         perror("something failed");
         return nullptr;
     }
-    block *current = freeList;
+    block *allocateBlock = freeList;
+    block *prev = nullptr;
     // first fit for now
-    while (current)
+    while (allocateBlock)
     {
-        if ((current->payload >= size) && (current->free == true))
+        // splitting the superblock.. need to include size of header 
+        // and leave at least more than an annoying amount of memory
+        if ((allocateBlock->payload >= size + sizeof(block) + MIN_SPLIT_SIZE) && (allocateBlock->free == true))
         {
-            freeList->free = false;
+            block *newSuperBlock = reinterpret_cast<block *>(reinterpret_cast<char *>(allocateBlock + 1) + size);
+
+            newSuperBlock->payload = allocateBlock->payload - size - sizeof(block);
+            newSuperBlock->free = true;
+            newSuperBlock->next = allocateBlock->next;
+
+            allocateBlock->payload = size;
+            allocateBlock->free = false;
+            allocateBlock->next = newSuperBlock;
+
             // skip size go to payload
-            return reinterpret_cast<void *>(current + 1);
+            return reinterpret_cast<void *>(allocateBlock + 1);
         }
-        current = current->next;
+        else if ((allocateBlock->payload >= size + sizeof(block)) && (allocateBlock->free == true))
+        {
+            // just give whole block
+            allocateBlock->free = false;
+            return reinterpret_cast<void *>(allocateBlock + 1);
+        }
+        prev = allocateBlock;
+        allocateBlock = allocateBlock->next;
     }
     perror("no block available");
     return nullptr;
+}
+
+void printFreeList()
+{
+    std::cout << "---- Free List ----" << std::endl;
+    block *current = freeList;
+    int index = 0;
+    while (current)
+    {
+        std::cout << "[" << index << "] "
+                  << "Address: " << current
+                  << " | Payload: " << current->payload
+                  << " | Free: " << (current->free ? "Yes" : "No")
+                  << " | Next: " << current->next
+                  << std::endl;
+        current = current->next;
+        index++;
+    }
+    std::cout << "-------------------" << std::endl;
 }
 
 int main ()
@@ -94,20 +154,29 @@ int main ()
     const size_t superBlockSize = 1 << 20; // 1 MB
     getSuperBlock(superBlockSize);
 
-    size_t size = 100;
-    void *ptr = myMalloc(size);
+    std::cout << "Initial free list:" << std::endl;
+    printFreeList();
 
-    if (ptr) {
-        std::cout << "allocated: " << ptr << std::endl;
+    void *a = myMalloc(100);
+    void *b = myMalloc(200);
+    void *c = myMalloc(300);
 
-        // Write something
-        std::strcpy(static_cast<char*>(ptr), "Hello");
-        std::cout << "wrote: " << static_cast<char*>(ptr) << std::endl;
+    std::cout << "\nAfter allocations:" << std::endl;
+    printFreeList();
 
-        myFree(ptr);
-        finalFree(superBlockPtr, superBlockSize);
-        std::cout << "freed." << std::endl;
-    }
+    myFree(b);
+    std::cout << "\nAfter freeing b (200 bytes):" << std::endl;
+    printFreeList();
+
+    myFree(a);
+    std::cout << "\nAfter freeing a (100 bytes):" << std::endl;
+    printFreeList();
+
+    myFree(c);
+    std::cout << "\nAfter freeing c (300 bytes):" << std::endl;
+    printFreeList();
+
+    finalFree(superBlockPtr, superBlockSize);
 
     return 1;
 }
