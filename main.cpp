@@ -13,7 +13,7 @@ struct block {
     size_t payload;
     bool free;
     block *next;
-
+    block *prev;
 };
 
 void *superBlockPtr = nullptr;
@@ -49,6 +49,7 @@ void getSuperBlock (size_t size)
     freeList->payload = size - sizeof(block);
     freeList->free = true;
     freeList->next = nullptr;
+    freeList->prev = nullptr;
 }
 
 void finalFree(void *addrPtr, size_t size)
@@ -72,6 +73,8 @@ void coalesce ()
             // extend payload space to header of next + its payload
             current->payload += sizeof(block) + next->payload;
             current->next = next->next;
+            if (next->next)
+                next->next->prev = current;
         }
         else
         {
@@ -109,6 +112,10 @@ void *myMalloc (size_t size)
             newSuperBlock->payload = allocateBlock->payload - size - sizeof(block);
             newSuperBlock->free = true;
             newSuperBlock->next = allocateBlock->next;
+            newSuperBlock->prev = allocateBlock;
+
+            if (allocateBlock->next)
+                allocateBlock->next->prev = newSuperBlock;
 
             allocateBlock->payload = size;
             allocateBlock->free = false;
@@ -142,6 +149,7 @@ void printFreeList()
                   << " | Payload: " << current->payload
                   << " | Free: " << (current->free ? "Yes" : "No")
                   << " | Next: " << current->next
+                  << " | Prev: " << current->prev
                   << std::endl;
         current = current->next;
         index++;
