@@ -8,7 +8,6 @@
 // allocate memory in blocks, need a header for each block
 // block size = header, payload and padding
 // payload is the allocated size
-// plannign for doubly linked list
 struct block {
     size_t payload;
     bool free;
@@ -60,35 +59,60 @@ void finalFree(void *addrPtr, size_t size)
     }
 }
 
-void coalesce ()
-{
-    block *current = freeList;
-    while (current && current->next)
-    {
-        block *next = current->next;
-        // current end point to first byte post current (should be address of next)
-        char *curr_end = reinterpret_cast<char *>(current) + sizeof(block) + current->payload;
-        if (curr_end == reinterpret_cast<char *>(next))
-        {
-            // extend payload space to header of next + its payload
-            current->payload += sizeof(block) + next->payload;
-            current->next = next->next;
-            if (next->next)
-                next->next->prev = current;
-        }
-        else
-        {
-            current = current->next;
-        }
-    }
-}
 void myFree(void *ptr)
 {
     if (!ptr) return;
 
-    block *header = reinterpret_cast<block *>(ptr) - 1;
-    header->free = true;
-    coalesce();
+    block *current = reinterpret_cast<block *>(ptr) - 1;
+    current->free = true;
+    // coalese
+
+    // check front
+    block* next = current->next;
+    if(next && next->free)
+    {
+        char *current_end = reinterpret_cast<char*> (current) + sizeof(block) + current->payload;
+        if (reinterpret_cast<char*>(next) == current_end)
+        {
+            // increase current payload to include size of next block
+            current->payload += sizeof(block) + next->payload;
+            current->next = next->next;
+
+            // ensure skip current
+            if (next->next)
+            {
+                next->next->prev = current;
+            }
+
+        }
+    }
+    // check back
+    block* prev = current->prev;
+    // if block exists + is free
+    if (prev && prev->free)
+    {
+        // if the current (freelist pointer) is the same as end of prev block
+        // end is the pointer itself (staring offset) + the size of header, + size of the block
+        char *prev_end = reinterpret_cast<char*> (prev) + sizeof(block) + prev->payload;
+        if (reinterpret_cast<char*> (current) == prev_end)
+        {
+            // add the free list to the prev
+            prev->payload += sizeof(block) + current->payload;
+            prev->next = current->next;
+            
+            if (current->next)
+            {
+                current->next->prev = prev;
+            }
+            if (current == freeList)
+            {
+                freeList = prev;
+            }
+
+        }
+
+    }
+    // check front
 }
 
 void *myMalloc (size_t size)
@@ -172,19 +196,22 @@ int main ()
     std::cout << "\nAfter allocations:" << std::endl;
     printFreeList();
 
-    myFree(b);
-    std::cout << "\nAfter freeing b (200 bytes):" << std::endl;
-    printFreeList();
-
-    myFree(a);
-    std::cout << "\nAfter freeing a (100 bytes):" << std::endl;
-    printFreeList();
-
-    myFree(c);
+        // --- Test forward coalescing (B + C) ---
+    myFree(c); // Free C first (right)
     std::cout << "\nAfter freeing c (300 bytes):" << std::endl;
     printFreeList();
 
+    myFree(b); // Free B next (left of C) → B + C coalesce
+    std::cout << "\nAfter freeing b (200 bytes):" << std::endl;
+    printFreeList();
+
+    // --- Test backward coalescing (A + (B+C)) ---
+    myFree(a); // Now free A → full coalesce A + B + C
+    std::cout << "\nAfter freeing a (100 bytes):" << std::endl;
+    printFreeList();
+
     finalFree(superBlockPtr, superBlockSize);
+
 
     return 1;
 }
