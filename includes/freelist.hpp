@@ -2,8 +2,9 @@
 #define FREELIST_ALLOCATOR_HPP
 
 #include <cstddef>  // for size_t
+#include "memory_region.hpp"
 
-void  initFreeList(size_t size);
+void  initFreeList(MemoryRegion region);
 void* freeListMalloc(size_t size);
 void  freeListFree(void* ptr);
 void  printFreeList();

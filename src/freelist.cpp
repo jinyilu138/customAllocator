@@ -1,10 +1,9 @@
 #include "freelist.hpp"
+#include "memory_region.hpp"
 #include <iostream>
-#include <sys/mman.h>
 #include <unistd.h>
 
-#define PAGE_SIZE 4096
-#define MIN_SPLIT_SIZE 16
+constexpr std::size_t MIN_SPLIT_SIZE = 16;
 
 // allocate memory in blocks, need a header for each block
 // block size = header, payload and padding
@@ -16,19 +15,36 @@ struct block {
     block *prev;
 };
 
-extern char* freeListEnd; // include from superblock
-block *freeList = nullptr;
+static char*  g_base = nullptr;
+static size_t g_size = 0;
+static block* g_head = nullptr;
+
+static bool inRange(const void* p) {
+    auto addr = reinterpret_cast<const char*>(p);
+    return g_base && addr >= g_base && addr < (g_base + g_size);
+}
 
 // wrapper to get super block
-void initFreeList (size_t size)
+void initFreeList (MemoryRegion region)
 {
-    freeList = reinterpret_cast<block*>(freeListEnd);
+    g_base = static_cast<char*>(region.base);
+    g_size = region.size;
 
+    g_head = nullptr;
+
+    if (!g_base || g_size < sizeof(block)) {
+        std::cerr << "FreeList init: invalid region\n";
+        g_base = nullptr; 
+        g_size = 0;
+        g_head = nullptr;
+        return;
+    }
     // init the block
-    freeList->payload = size - sizeof(block);
-    freeList->free = true;
-    freeList->next = nullptr;
-    freeList->prev = nullptr;
+    g_head = reinterpret_cast<block*>(g_base);
+    g_head->payload = region.size - sizeof(block);
+    g_head->free = true;
+    g_head->next = nullptr;
+    g_head->prev = nullptr;
 }
 
 // free from superblock
@@ -37,6 +53,7 @@ void freeListFree(void *ptr)
     if (!ptr) return;
 
     block *current = reinterpret_cast<block *>(ptr) - 1;
+    if (!inRange(current)) return;
     current->free = true;
     // coalese
 
@@ -77,9 +94,9 @@ void freeListFree(void *ptr)
             {
                 current->next->prev = prev;
             }
-            if (current == freeList)
+            if (current == g_head)
             {
-                freeList = prev;
+                g_head = prev;
             }
 
         }
@@ -91,54 +108,52 @@ void freeListFree(void *ptr)
 // allocate from superblock
 void *freeListMalloc (size_t size)
 {
-    if (freeList == nullptr)
-    {
-        perror("something failed");
-        return nullptr;
-    }
-    block *allocateBlock = freeList;
+    if (!g_head || size == 0) return nullptr;
+
+    block *current = g_head;
     block *prev = nullptr;
     // first fit for now
-    while (allocateBlock)
+    while (current)
     {
+        if (current->free)
+        {
+            if ((current->payload >= size + sizeof(block) + MIN_SPLIT_SIZE) && (current->free == true))
+            {
+                block *newBlock = reinterpret_cast<block *>(reinterpret_cast<char *>(current + 1) + size);
+
+                newBlock->payload = current->payload - size - sizeof(block);
+                newBlock->free = true;
+                newBlock->next = current->next;
+                newBlock->prev = current;
+
+                if (current->next) current->next->prev = newBlock;
+
+                current->payload = size;
+                current->free = false;
+                current->next = newBlock;
+
+                // skip size go to payload
+                return reinterpret_cast<void *>(current + 1);
+            }
+            else if ((current->payload >= size + sizeof(block)) && (current->free == true))
+            {
+                // just give whole block
+                current->free = false;
+                return reinterpret_cast<void *>(current + 1);
+            }
+
+        }
         // splitting the superblock.. need to include size of header 
         // and leave at least more than an annoying amount of memory
-        if ((allocateBlock->payload >= size + sizeof(block) + MIN_SPLIT_SIZE) && (allocateBlock->free == true))
-        {
-            block *newSuperBlock = reinterpret_cast<block *>(reinterpret_cast<char *>(allocateBlock + 1) + size);
-
-            newSuperBlock->payload = allocateBlock->payload - size - sizeof(block);
-            newSuperBlock->free = true;
-            newSuperBlock->next = allocateBlock->next;
-            newSuperBlock->prev = allocateBlock;
-
-            if (allocateBlock->next)
-                allocateBlock->next->prev = newSuperBlock;
-
-            allocateBlock->payload = size;
-            allocateBlock->free = false;
-            allocateBlock->next = newSuperBlock;
-
-            // skip size go to payload
-            return reinterpret_cast<void *>(allocateBlock + 1);
-        }
-        else if ((allocateBlock->payload >= size + sizeof(block)) && (allocateBlock->free == true))
-        {
-            // just give whole block
-            allocateBlock->free = false;
-            return reinterpret_cast<void *>(allocateBlock + 1);
-        }
-        prev = allocateBlock;
-        allocateBlock = allocateBlock->next;
+        current = current->next;
     }
-    perror("no block available");
     return nullptr;
 }
 
 void printFreeList()
 {
     std::cout << "---- Free List ----" << std::endl;
-    block *current = freeList;
+    block *current = g_head;
     int index = 0;
     while (current)
     {

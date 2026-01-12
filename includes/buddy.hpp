@@ -2,8 +2,9 @@
 #define BUDDY_ALLOCATOR_HPP
 
 #include <cstddef>  // for size_t
+#include "memory_region.hpp"
 
-void  initBuddyAllocation(size_t size);
+void  initBuddyAllocation(MemoryRegion region);
 void* buddyMalloc(size_t size);
 void  buddyFree(void* ptr);
 void  printBuddyList();
